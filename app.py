@@ -88,7 +88,7 @@ YWL_TEMPLATE_URL = get_secret_link("ywl_template_url")
 
 
 # ==========================================
-# HELPER FUNCTIONS (UPDATED FOR TABLES/RUNS)
+# HELPER FUNCTIONS
 # ==========================================
 def extract_doc_id(url: str) -> str:
     """Extract Google Doc ID from full URL."""
@@ -114,18 +114,18 @@ def replace_placeholders_in_paragraph(paragraph, replacements: dict):
                 if key in run.text:
                     run.text = run.text.replace(key, value)
             
-            # 2. Second attempt: If placeholder is fragmented across multiple runs (Very common in tables)
+            # 2. Second attempt: If placeholder is fragmented across multiple runs
             if key in paragraph.text:
                 if paragraph.runs:
-                    # Save the formatting base of the first run
+                    # Save formatting of first run
                     r1 = paragraph.runs[0]
                     bold, italic, underline = r1.bold, r1.italic, r1.underline
                     font_name, font_size = r1.font.name, r1.font.size
                     
-                    # Overwrite entire paragraph text (this merges all fragmented runs)
+                    # Overwrite paragraph text
                     paragraph.text = paragraph.text.replace(key, value)
                     
-                    # Re-apply original formatting to the newly merged text run
+                    # Re-apply original formatting
                     if paragraph.runs:
                         nr = paragraph.runs[0]
                         nr.bold, nr.italic, nr.underline = bold, italic, underline
@@ -210,22 +210,22 @@ with st.form("doc_generation_form"):
     col1, col2 = st.columns(2)
     
     with col1:
-        client_name = st.text_input("Client Name", value="")
-        client_nric = st.text_input("NRIC / Passport / Reg. No.", value="")
-        client_email = st.text_input("Client Email", value="")
+        client_name = st.text_input("Client Name *", value="")
+        client_nric = st.text_input("NRIC / Passport / Reg. No. *", value="")
+        client_email = st.text_input("Client Email *", value="")
         
     with col2:
-        client_contact = st.text_input("Contact Number", value="+60")
-        agreement_date = st.date_input("Agreement Date", value=datetime.date.today())
+        client_contact = st.text_input("Contact Number *", value="+60")
+        agreement_date = st.date_input("Agreement Date *", value=datetime.date.today())
         
-    client_address = st.text_area("Correspondence Address", value="")
+    client_address = st.text_area("Correspondence Address *", value="")
 
     st.subheader("2. Advisor Information")
     w_col1, w_col2 = st.columns(2)
     with w_col1:
-        advisor_name = st.text_input("Advisor / Witness Name", value="")
+        advisor_name = st.text_input("Advisor / Witness Name *", value="")
     with w_col2:
-        advisor_nric = st.text_input("Advisor / Witness NRIC", value="")
+        advisor_nric = st.text_input("Advisor / Witness NRIC *", value="")
 
     submit_button = st.form_submit_button("Generate Agreement (PDF)")
 
@@ -239,16 +239,28 @@ if submit_button:
     else:
         errors = []
 
-        # 1. Mandatory Client Name Check
+        # Mandatory Field Checks (ALL fields required)
         if not client_name.strip():
-            errors.append("Please enter the Client Name before proceeding.")
+            errors.append("Please enter the Client Name.")
+        if not client_nric.strip():
+            errors.append("Please enter the Client NRIC / Passport / Reg. No.")
+        if not client_email.strip():
+            errors.append("Please enter the Client Email.")
+        if not client_contact.strip() or client_contact.strip() == "+60":
+            errors.append("Please enter the Contact Number.")
+        if not client_address.strip():
+            errors.append("Please enter the Correspondence Address.")
+        if not advisor_name.strip():
+            errors.append("Please enter the Advisor / Witness Name.")
+        if not advisor_nric.strip():
+            errors.append("Please enter the Advisor / Witness NRIC.")
 
-        # 2. Client Email Validation
+        # Email Format Validation
         email_regex = r"^[\w\.-]+@[\w\.-]+\.\w+$"
         if client_email.strip() and not re.match(email_regex, client_email.strip()):
             errors.append("Invalid Client Email format.")
 
-        # 3. Contact Number Validation
+        # Contact Number Format Validation
         clean_contact = re.sub(r"[\s\-\(\)]", "", client_contact.strip())
         if clean_contact and not re.match(r"^\+?\d{7,15}$", clean_contact):
             errors.append("Invalid Contact Number format. Please enter a valid number (e.g., +60123456789).")
@@ -263,26 +275,23 @@ if submit_button:
                 # --- Text Formatting Rules ---
                 formatted_client_name = client_name.strip().upper()
                 formatted_client_nric = client_nric.strip().upper()
-                formatted_client_address = client_address.strip().title() if client_address.strip() else ""
+                formatted_client_address = client_address.strip().title()
                 formatted_advisor_name = advisor_name.strip().upper()
                 formatted_advisor_nric = advisor_nric.strip().upper()
                 
                 # Format date as e.g., "12 August 2026"
                 formatted_agreement_date = agreement_date.strftime("%d %B %Y")
 
-                raw_replacements = {
+                replacements = {
                     "<<CLIENT_NAME>>": formatted_client_name,
                     "<<CLIENT_NRIC>>": formatted_client_nric,
-                    "<<CLIENT_EMAIL>>": client_email,
-                    "<<CLIENT_CONTACT>>": client_contact,
+                    "<<CLIENT_EMAIL>>": client_email.strip(),
+                    "<<CLIENT_CONTACT>>": client_contact.strip(),
                     "<<CLIENT_ADDRESS>>": formatted_client_address,
                     "<<DATE>>": formatted_agreement_date,
                     "<<ADVISOR_NAME>>": formatted_advisor_name,
                     "<<ADVISOR_NRIC>>": formatted_advisor_nric,
                 }
-
-                # Map empty inputs to spaces so placeholders vanish cleanly if left empty
-                replacements = {k: (v.strip() if v and str(v).strip() else "  ") for k, v in raw_replacements.items()}
 
                 clean_file_client_name = client_name.strip().upper()
                 clean_file_date = agreement_date.strftime("%Y%m%d")
