@@ -211,7 +211,7 @@ with st.form("doc_generation_form"):
     
     with col1:
         client_name = st.text_input("Client Name *", value="")
-        client_nric = st.text_input("NRIC / Passport / Reg. No. *", value="")
+        client_nric = st.text_input("NRIC *", value="")
         client_email = st.text_input("Client Email *", value="")
         
     with col2:
