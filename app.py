@@ -86,8 +86,9 @@ def get_secret_link(key: str) -> str:
 # Fetch Google Doc URL provided for YWL - Client Appointment Letter from secrets
 YWL_TEMPLATE_URL = get_secret_link("ywl_template_url")
 
+
 # ==========================================
-# HELPER FUNCTIONS
+# HELPER FUNCTIONS (UPDATED FOR TABLES/RUNS)
 # ==========================================
 def extract_doc_id(url: str) -> str:
     """Extract Google Doc ID from full URL."""
@@ -104,43 +105,69 @@ def fetch_google_doc_bytes(url: str) -> bytes:
     response.raise_for_status()
     return response.content
 
-def replace_placeholders_in_element(element, replacements: dict):
-    """Recursively replace placeholder keys across paragraphs and runs, fixing broken runs in tables."""
-    # 1. Process all paragraphs directly available in this element
-    for p in element.paragraphs:
-        for key, value in replacements.items():
-            if key in p.text:
-                # If python-docx split the placeholder across multiple runs, 
-                # we clear the other runs and dump the full replaced text into the first run.
-                full_text = p.text
-                if key in full_text:
-                    full_text = full_text.replace(key, value)
-                    if len(p.runs) > 0:
-                        p.runs[0].text = full_text
-                        for run in p.runs[1:]:
-                            run.text = ""
+def replace_placeholders_in_paragraph(paragraph, replacements: dict):
+    """Replace placeholder keys in paragraph, handling runs spanning multiple segments."""
+    for key, value in replacements.items():
+        if key in paragraph.text:
+            # 1. First attempt: Replace cleanly within individual runs
+            for run in paragraph.runs:
+                if key in run.text:
+                    run.text = run.text.replace(key, value)
+            
+            # 2. Second attempt: If placeholder is fragmented across multiple runs (Very common in tables)
+            if key in paragraph.text:
+                if paragraph.runs:
+                    # Save the formatting base of the first run
+                    r1 = paragraph.runs[0]
+                    bold, italic, underline = r1.bold, r1.italic, r1.underline
+                    font_name, font_size = r1.font.name, r1.font.size
+                    
+                    # Overwrite entire paragraph text (this merges all fragmented runs)
+                    paragraph.text = paragraph.text.replace(key, value)
+                    
+                    # Re-apply original formatting to the newly merged text run
+                    if paragraph.runs:
+                        nr = paragraph.runs[0]
+                        nr.bold, nr.italic, nr.underline = bold, italic, underline
+                        if font_name: nr.font.name = font_name
+                        if font_size: nr.font.size = font_size
+                else:
+                    paragraph.text = paragraph.text.replace(key, value)
 
-    # 2. Process all tables nested inside this element
-    for table in element.tables:
-        for row in table.rows:
-            for cell in row.cells:
-                # Cells themselves contain paragraphs/tables, so recurse into cells
-                replace_placeholders_in_element(cell, replacements)
+def process_table(table, replacements: dict):
+    """Recursively process tables to ensure no cells or nested tables are missed."""
+    for row in table.rows:
+        for cell in row.cells:
+            for p in cell.paragraphs:
+                replace_placeholders_in_paragraph(p, replacements)
+            for nested_table in cell.tables:
+                process_table(nested_table, replacements)
 
 def process_docx_bytes(file_bytes: bytes, replacements: dict) -> bytes:
     """Load DOCX bytes, replace placeholders globally, and return modified DOCX bytes."""
     doc_io = io.BytesIO(file_bytes)
     doc = Document(doc_io)
 
-    # Process main body paragraphs and tables
-    replace_placeholders_in_element(doc, replacements)
+    # 1. Process standard paragraphs
+    for p in doc.paragraphs:
+        replace_placeholders_in_paragraph(p, replacements)
+
+    # 2. Process tables globally
+    for table in doc.tables:
+        process_table(table, replacements)
                     
-    # Process headers and footers securely
+    # 3. Process headers and footers
     for section in doc.sections:
         if section.header:
-            replace_placeholders_in_element(section.header, replacements)
+            for p in section.header.paragraphs:
+                replace_placeholders_in_paragraph(p, replacements)
+            for table in section.header.tables:
+                process_table(table, replacements)
         if section.footer:
-            replace_placeholders_in_element(section.footer, replacements)
+            for p in section.footer.paragraphs:
+                replace_placeholders_in_paragraph(p, replacements)
+            for table in section.footer.tables:
+                process_table(table, replacements)
 
     output_io = io.BytesIO()
     doc.save(output_io)
@@ -206,6 +233,7 @@ with st.form("doc_generation_form"):
 # VALIDATION & PROCESSING
 # ==========================================
 if submit_button:
+    # Ensure the secret URL loaded properly before processing
     if not YWL_TEMPLATE_URL:
         st.error("Cannot proceed. The template URL is missing from Streamlit secrets.")
     else:
@@ -265,7 +293,7 @@ if submit_button:
                     # 1. Fetch Google Doc template using the secret URL
                     doc_bytes_raw = fetch_google_doc_bytes(YWL_TEMPLATE_URL)
 
-                    # 2. Populate placeholders safely across tables and paragraphs
+                    # 2. Populate placeholders
                     processed_docx = process_docx_bytes(doc_bytes_raw, replacements)
 
                     # 3. Convert to PDF
