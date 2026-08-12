@@ -104,48 +104,43 @@ def fetch_google_doc_bytes(url: str) -> bytes:
     response.raise_for_status()
     return response.content
 
-def replace_placeholders_in_paragraph(paragraph, replacements: dict):
-    """Replace placeholder keys in paragraph while preserving text runs and formatting."""
-    for key, value in replacements.items():
-        if key in paragraph.text:
-            for run in paragraph.runs:
-                if key in run.text:
-                    run.text = run.text.replace(key, value)
+def replace_placeholders_in_element(element, replacements: dict):
+    """Recursively replace placeholder keys across paragraphs and runs, fixing broken runs in tables."""
+    # 1. Process all paragraphs directly available in this element
+    for p in element.paragraphs:
+        for key, value in replacements.items():
+            if key in p.text:
+                # If python-docx split the placeholder across multiple runs, 
+                # we clear the other runs and dump the full replaced text into the first run.
+                full_text = p.text
+                if key in full_text:
+                    full_text = full_text.replace(key, value)
+                    if len(p.runs) > 0:
+                        p.runs[0].text = full_text
+                        for run in p.runs[1:]:
+                            run.text = ""
+
+    # 2. Process all tables nested inside this element
+    for table in element.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                # Cells themselves contain paragraphs/tables, so recurse into cells
+                replace_placeholders_in_element(cell, replacements)
 
 def process_docx_bytes(file_bytes: bytes, replacements: dict) -> bytes:
     """Load DOCX bytes, replace placeholders globally, and return modified DOCX bytes."""
     doc_io = io.BytesIO(file_bytes)
     doc = Document(doc_io)
 
-    # 1. Process standard paragraphs
-    for p in doc.paragraphs:
-        replace_placeholders_in_paragraph(p, replacements)
-
-    # 2. Process tables
-    for table in doc.tables:
-        for row in table.rows:
-            for cell in row.cells:
-                for p in cell.paragraphs:
-                    replace_placeholders_in_paragraph(p, replacements)
+    # Process main body paragraphs and tables
+    replace_placeholders_in_element(doc, replacements)
                     
-    # 3. Process headers and footers
+    # Process headers and footers securely
     for section in doc.sections:
         if section.header:
-            for p in section.header.paragraphs:
-                replace_placeholders_in_paragraph(p, replacements)
-            for table in section.header.tables:
-                for row in table.rows:
-                    for cell in row.cells:
-                        for p in cell.paragraphs:
-                            replace_placeholders_in_paragraph(p, replacements)
+            replace_placeholders_in_element(section.header, replacements)
         if section.footer:
-            for p in section.footer.paragraphs:
-                replace_placeholders_in_paragraph(p, replacements)
-            for table in section.footer.tables:
-                for row in table.rows:
-                    for cell in row.cells:
-                        for p in cell.paragraphs:
-                            replace_placeholders_in_paragraph(p, replacements)
+            replace_placeholders_in_element(section.footer, replacements)
 
     output_io = io.BytesIO()
     doc.save(output_io)
@@ -211,7 +206,6 @@ with st.form("doc_generation_form"):
 # VALIDATION & PROCESSING
 # ==========================================
 if submit_button:
-    # Ensure the secret URL loaded properly before processing
     if not YWL_TEMPLATE_URL:
         st.error("Cannot proceed. The template URL is missing from Streamlit secrets.")
     else:
@@ -271,7 +265,7 @@ if submit_button:
                     # 1. Fetch Google Doc template using the secret URL
                     doc_bytes_raw = fetch_google_doc_bytes(YWL_TEMPLATE_URL)
 
-                    # 2. Populate placeholders
+                    # 2. Populate placeholders safely across tables and paragraphs
                     processed_docx = process_docx_bytes(doc_bytes_raw, replacements)
 
                     # 3. Convert to PDF
