@@ -70,22 +70,10 @@ components.html("""
 """, height=0, width=0)
 
 # ==========================================
-# STREAMLIT SECRETS / LINK CONFIGURATION
+# TEMPLATE CONFIGURATION
 # ==========================================
-def get_secret_link(key: str) -> str:
-    """Fetch URL strictly from Streamlit Secrets."""
-    try:
-        return st.secrets["templates"][key]
-    except KeyError:
-        st.error(f"Missing required secret key: `templates.{key}`. Please configure it in your Streamlit secrets.")
-        return ""
-    except Exception as e:
-        st.error(f"Error accessing secret `templates.{key}`: {e}")
-        return ""
-
-# Fetch Google Doc URL provided for YWL - Client Appointment Letter from secrets
-YWL_TEMPLATE_URL = get_secret_link("ywl_template_url")
-
+# Google Doc URL provided for YWL - Client Appointment Letter
+YWL_TEMPLATE_URL = "https://docs.google.com/document/d/1LnriO5OPwb94aLdJh7tMsSnMpwnH5qIA/"
 
 # ==========================================
 # HELPER FUNCTIONS
@@ -106,42 +94,12 @@ def fetch_google_doc_bytes(url: str) -> bytes:
     return response.content
 
 def replace_placeholders_in_paragraph(paragraph, replacements: dict):
-    """Replace placeholder keys in paragraph, handling runs spanning multiple segments."""
+    """Replace placeholder keys in paragraph while preserving text runs and formatting."""
     for key, value in replacements.items():
         if key in paragraph.text:
-            # 1. First attempt: Replace cleanly within individual runs
             for run in paragraph.runs:
                 if key in run.text:
                     run.text = run.text.replace(key, value)
-            
-            # 2. Second attempt: If placeholder is fragmented across multiple runs
-            if key in paragraph.text:
-                if paragraph.runs:
-                    # Save formatting of first run
-                    r1 = paragraph.runs[0]
-                    bold, italic, underline = r1.bold, r1.italic, r1.underline
-                    font_name, font_size = r1.font.name, r1.font.size
-                    
-                    # Overwrite paragraph text
-                    paragraph.text = paragraph.text.replace(key, value)
-                    
-                    # Re-apply original formatting
-                    if paragraph.runs:
-                        nr = paragraph.runs[0]
-                        nr.bold, nr.italic, nr.underline = bold, italic, underline
-                        if font_name: nr.font.name = font_name
-                        if font_size: nr.font.size = font_size
-                else:
-                    paragraph.text = paragraph.text.replace(key, value)
-
-def process_table(table, replacements: dict):
-    """Recursively process tables to ensure no cells or nested tables are missed."""
-    for row in table.rows:
-        for cell in row.cells:
-            for p in cell.paragraphs:
-                replace_placeholders_in_paragraph(p, replacements)
-            for nested_table in cell.tables:
-                process_table(nested_table, replacements)
 
 def process_docx_bytes(file_bytes: bytes, replacements: dict) -> bytes:
     """Load DOCX bytes, replace placeholders globally, and return modified DOCX bytes."""
@@ -152,9 +110,12 @@ def process_docx_bytes(file_bytes: bytes, replacements: dict) -> bytes:
     for p in doc.paragraphs:
         replace_placeholders_in_paragraph(p, replacements)
 
-    # 2. Process tables globally
+    # 2. Process tables
     for table in doc.tables:
-        process_table(table, replacements)
+        for row in table.rows:
+            for cell in row.cells:
+                for p in cell.paragraphs:
+                    replace_placeholders_in_paragraph(p, replacements)
                     
     # 3. Process headers and footers
     for section in doc.sections:
@@ -162,12 +123,18 @@ def process_docx_bytes(file_bytes: bytes, replacements: dict) -> bytes:
             for p in section.header.paragraphs:
                 replace_placeholders_in_paragraph(p, replacements)
             for table in section.header.tables:
-                process_table(table, replacements)
+                for row in table.rows:
+                    for cell in row.cells:
+                        for p in cell.paragraphs:
+                            replace_placeholders_in_paragraph(p, replacements)
         if section.footer:
             for p in section.footer.paragraphs:
                 replace_placeholders_in_paragraph(p, replacements)
             for table in section.footer.tables:
-                process_table(table, replacements)
+                for row in table.rows:
+                    for cell in row.cells:
+                        for p in cell.paragraphs:
+                            replace_placeholders_in_paragraph(p, replacements)
 
     output_io = io.BytesIO()
     doc.save(output_io)
@@ -210,116 +177,82 @@ with st.form("doc_generation_form"):
     col1, col2 = st.columns(2)
     
     with col1:
-        client_name = st.text_input("Client Name *", value="")
-        client_nric = st.text_input("NRIC *", value="")
-        client_email = st.text_input("Client Email *", value="")
+        client_name = st.text_input("Client Name", value="")
+        client_nric = st.text_input("NRIC / Passport / Reg. No.", value="")
+        client_email = st.text_input("Client Email", value="")
         
     with col2:
-        client_contact = st.text_input("Contact Number *", value="+60")
-        agreement_date = st.date_input("Agreement Date *", value=datetime.date.today())
+        client_contact = st.text_input("Contact Number", value="")
+        agreement_date = st.date_input("Agreement Date", value=datetime.date.today())
         
-    client_address = st.text_area("Correspondence Address *", value="")
+    client_address = st.text_area("Correspondence Address", value="")
 
     st.subheader("2. Advisor Information")
     w_col1, w_col2 = st.columns(2)
     with w_col1:
-        advisor_name = st.text_input("Advisor / Witness Name *", value="")
+        advisor_name = st.text_input("Advisor / Witness Name", value="")
     with w_col2:
-        advisor_nric = st.text_input("Advisor / Witness NRIC *", value="")
+        advisor_nric = st.text_input("Advisor / Witness NRIC", value="")
 
     submit_button = st.form_submit_button("Generate Agreement (PDF)")
 
 # ==========================================
-# VALIDATION & PROCESSING
+# PROCESSING
 # ==========================================
 if submit_button:
-    # Ensure the secret URL loaded properly before processing
-    if not YWL_TEMPLATE_URL:
-        st.error("Cannot proceed. The template URL is missing from Streamlit secrets.")
-    else:
-        errors = []
+    with st.spinner("Fetching template and generating PDF..."):
+        
+        # --- Text Formatting Rules ---
+        formatted_client_name = client_name.strip().upper()
+        formatted_client_nric = client_nric.strip().upper()
+        formatted_client_address = client_address.strip().title() if client_address.strip() else ""
+        formatted_advisor_name = advisor_name.strip().upper()
+        formatted_advisor_nric = advisor_nric.strip().upper()
+        
+        # Format date as e.g., "12 August 2026"
+        formatted_agreement_date = agreement_date.strftime("%d %B %Y") if agreement_date else ""
 
-        # Mandatory Field Checks (ALL fields required)
-        if not client_name.strip():
-            errors.append("Please enter the Client Name.")
-        if not client_nric.strip():
-            errors.append("Please enter the Client NRIC / Passport / Reg. No.")
-        if not client_email.strip():
-            errors.append("Please enter the Client Email.")
-        if not client_contact.strip() or client_contact.strip() == "+60":
-            errors.append("Please enter the Contact Number.")
-        if not client_address.strip():
-            errors.append("Please enter the Correspondence Address.")
-        if not advisor_name.strip():
-            errors.append("Please enter the Advisor / Witness Name.")
-        if not advisor_nric.strip():
-            errors.append("Please enter the Advisor / Witness NRIC.")
+        raw_replacements = {
+            "<<CLIENT_NAME>>": formatted_client_name,
+            "<<CLIENT_NRIC>>": formatted_client_nric,
+            "<<CLIENT_EMAIL>>": client_email,
+            "<<CLIENT_CONTACT>>": client_contact,
+            "<<CLIENT_ADDRESS>>": formatted_client_address,
+            "<<DATE>>": formatted_agreement_date,
+            "<<ADVISOR_NAME>>": formatted_advisor_name,
+            "<<ADVISOR_NRIC>>": formatted_advisor_nric,
+        }
 
-        # Email Format Validation
-        email_regex = r"^[\w\.-]+@[\w\.-]+\.\w+$"
-        if client_email.strip() and not re.match(email_regex, client_email.strip()):
-            errors.append("Invalid Client Email format.")
+        # Map empty inputs to spaces so placeholders vanish cleanly if left empty
+        replacements = {k: (v.strip() if v and str(v).strip() else "  ") for k, v in raw_replacements.items()}
 
-        # Contact Number Format Validation
-        clean_contact = re.sub(r"[\s\-\(\)]", "", client_contact.strip())
-        if clean_contact and not re.match(r"^\+?\d{7,15}$", clean_contact):
-            errors.append("Invalid Contact Number format. Please enter a valid number (e.g., +60123456789).")
+        clean_file_client_name = client_name.strip().upper() if client_name.strip() else "CLIENT"
+        clean_file_date = agreement_date.strftime("%Y%m%d") if agreement_date else ""
+        
+        file_name_base = f"[{clean_file_client_name}] YWL Mandate Agreement {clean_file_date}"
 
-        # Display Errors or Proceed
-        if errors:
-            for err in errors:
-                st.error(f"⚠️ {err}")
-        else:
-            with st.spinner("Fetching template and generating PDF..."):
+        try:
+            # 1. Fetch Google Doc template
+            doc_bytes_raw = fetch_google_doc_bytes(YWL_TEMPLATE_URL)
+
+            # 2. Populate placeholders
+            processed_docx = process_docx_bytes(doc_bytes_raw, replacements)
+
+            # 3. Convert to PDF
+            final_pdf = convert_docx_to_pdf(processed_docx)
+
+            if final_pdf:
+                st.success("✅ Document generated successfully!")
                 
-                # --- Text Formatting Rules ---
-                formatted_client_name = client_name.strip().upper()
-                formatted_client_nric = client_nric.strip().upper()
-                formatted_client_address = client_address.strip().title()
-                formatted_advisor_name = advisor_name.strip().upper()
-                formatted_advisor_nric = advisor_nric.strip().upper()
-                
-                # Format date as e.g., "12 August 2026"
-                formatted_agreement_date = agreement_date.strftime("%d %B %Y")
+                st.download_button(
+                    label="📥 Download Agreement (PDF)",
+                    data=final_pdf,
+                    file_name=f"{file_name_base}.pdf",
+                    mime="application/pdf",
+                    type="primary"
+                )
+            else:
+                st.error("Failed to generate PDF. Please check server dependencies (LibreOffice).")
 
-                replacements = {
-                    "<<CLIENT_NAME>>": formatted_client_name,
-                    "<<CLIENT_NRIC>>": formatted_client_nric,
-                    "<<CLIENT_EMAIL>>": client_email.strip(),
-                    "<<CLIENT_CONTACT>>": client_contact.strip(),
-                    "<<CLIENT_ADDRESS>>": formatted_client_address,
-                    "<<DATE>>": formatted_agreement_date,
-                    "<<ADVISOR_NAME>>": formatted_advisor_name,
-                    "<<ADVISOR_NRIC>>": formatted_advisor_nric,
-                }
-
-                clean_file_client_name = client_name.strip().upper()
-                clean_file_date = agreement_date.strftime("%Y%m%d")
-                
-                file_name_base = f"[{clean_file_client_name}] YWL Mandate Agreement {clean_file_date}"
-
-                try:
-                    # 1. Fetch Google Doc template using the secret URL
-                    doc_bytes_raw = fetch_google_doc_bytes(YWL_TEMPLATE_URL)
-
-                    # 2. Populate placeholders
-                    processed_docx = process_docx_bytes(doc_bytes_raw, replacements)
-
-                    # 3. Convert to PDF
-                    final_pdf = convert_docx_to_pdf(processed_docx)
-
-                    if final_pdf:
-                        st.success("✅ Document generated successfully!")
-                        
-                        st.download_button(
-                            label="📥 Download Agreement (PDF)",
-                            data=final_pdf,
-                            file_name=f"{file_name_base}.pdf",
-                            mime="application/pdf",
-                            type="primary"
-                        )
-                    else:
-                        st.error("Failed to generate PDF. Please check server dependencies (LibreOffice).")
-
-                except Exception as e:
-                    st.error(f"Error processing document: {e}")
+        except Exception as e:
+            st.error(f"Error processing document: {e}")
