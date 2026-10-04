@@ -73,7 +73,7 @@ components.html("""
 # TEMPLATE CONFIGURATION
 # ==========================================
 # Google Doc URL provided for YWL - Client Appointment Letter
-YWL_TEMPLATE_URL = "https://docs.google.com/document/d/1LnriO5OPwb94aLdJh7tMsSnMpwnH5qIA/"
+YWL_TEMPLATE_URL = get_secret_link("ywl_template_url")
 
 # ==========================================
 # HELPER FUNCTIONS
