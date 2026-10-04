@@ -72,6 +72,17 @@ components.html("""
 # ==========================================
 # TEMPLATE CONFIGURATION
 # ==========================================
+def get_secret_link(key: str) -> str:
+    """Fetch URL strictly from Streamlit Secrets."""
+    try:
+        return st.secrets["templates"][key]
+    except KeyError:
+        st.error(f"Missing required secret key: `templates.{key}`. Please configure it in your Streamlit secrets.")
+        return ""
+    except Exception as e:
+        st.error(f"Error accessing secret `templates.{key}`: {e}")
+        return ""
+
 # Google Doc URL provided for YWL - Client Appointment Letter
 YWL_TEMPLATE_URL = get_secret_link("ywl_template_url")
 
